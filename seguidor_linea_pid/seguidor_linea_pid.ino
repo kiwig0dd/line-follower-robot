@@ -2,20 +2,12 @@
  * Seguidor de línea PID
  * ESP32 + QTR-8A (analógico) + L298N + 2 motorreductores N20
  *
- * Todo se maneja con el botón BOOT del devkit (GPIO 0). No se usa ningún LED;
- * el estado se informa por el Monitor Serie (115200 baudios).
- *
  *   1) Enciende el robot -> queda esperando calibración.
  *   2) Pulsa BOOT -> 5 s de calibración: mueve el robot/sensor de lado a lado
  *      sobre la línea (negro y fondo blanco deben pasar por todos los sensores).
  *   3) Terminada la calibración (5 s) queda listo. Pulsa BOOT -> espera 1 s y arranca.
  *   4) Pulsa BOOT de nuevo para detener. Vuelve a pulsar para arrancar otra vez.
  *      (Mantén BOOT ~1 s estando detenido para recalibrar.)
- *
- * IMPORTANTE: no mantengas pulsado BOOT mientras enciendes o presionas EN/RESET,mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm++++++++++++++++++++++++++++++++++
- * porque el ESP32 entraría en modo de programación (bootloader).
- *
- * Alimenta el QTR-8A a 3.3 V para no exceder el límite del ADC del ESP32.
  */
 
 // ====================== PINES ======================
@@ -23,49 +15,48 @@ const uint8_t NUM_SENSORES = 8;
 const uint8_t pinesSensores[NUM_SENSORES] = { 34, 35, 32, 33, 25, 26, 27, 14 };  // S1 (izq) ... S8 (der)
 
 // L298N - Motor izquierdo (OUT1/OUT2)
-const uint8_t PIN_ENA = 18;  // PWM
+const uint8_t PIN_ENA = 18;
 const uint8_t PIN_IN1 = 16;
 const uint8_t PIN_IN2 = 17;
 
 // L298N - Motor derecho (OUT3/OUT4)
-const uint8_t PIN_ENB = 22;  // PWM
+const uint8_t PIN_ENB = 22;
 const uint8_t PIN_IN3 = 19;
 const uint8_t PIN_IN4 = 21;
 
-const uint8_t PIN_BOTON = 0;  // botón BOOT del devkit (activo en LOW, ya tiene pull-up externo)
+const uint8_t PIN_BOTON = 0;  // Boton BOOt, aqui hay que conectar un pulsador (por hacer) !!!!!!
 
 // ====================== CONFIGURACIÓN SENSORES ======================
-const bool LINEA_NEGRA = true;               // true: línea negra sobre fondo blanco
+const bool LINEA_NEGRA = true;  // true: línea negra sobre fondo blanco
 const unsigned long TIEMPO_CALIBRACION_MS = 5000;
-const int MUESTRAS_ADC = 4;                  // promedio por sensor (reduce ruido)
-const int UMBRAL_PERDIDA = 500;              // si ningún sensor supera esto -> línea perdida
-const int RUIDO_MIN = 150;                   // valores por debajo se ignoran en el cálculo
-const int RANGO_MINIMO = 300;                // rango de calibración mínimo para confiar en un sensor
+const int MUESTRAS_ADC = 4;      // promedio por sensor (reduce ruido)
+const int UMBRAL_PERDIDA = 500;  // si ningún sensor supera esto -> línea perdida
+const int RUIDO_MIN = 150;       // valores por debajo se ignoran en el cálculo
+const int RANGO_MINIMO = 150;    // rango de calibración mínimo para confiar en un sensor
 const int CENTRO = 3500;
 
-// Si un motor gira al revés, cambia su valor a true
 const bool INVERTIR_MOTOR_IZQ = true;
 const bool INVERTIR_MOTOR_DER = true;
 
-// ----- PID (ajústalo en pista) -----
-float KP =  0.30;  
+// ----- VALORES MODIFICABLES DEL PID -----
+float KP = 0.30;
 float KI = 0.0;
-float KD = 1;  
-const float INTEGRAL_MAX = 3000;             // anti-windup
+float KD = 1.00;
+const float INTEGRAL_MAX = 3000;
 
 // ----- Velocidades (0-255) -----
-const int VEL_BASE    = 235;
-const int VEL_MAX     = 255;
-const int VEL_PERDIDA = 215;                 // giro sobre su eje cuando se pierde la línea
+const int VEL_BASE = 235;
+const int VEL_MAX = 255;
+const int VEL_PERDIDA = 215;
 
 // ----- Lazo de control -----
-const unsigned long PERIODO_PID_US = 5000;   // 5 ms = 200 Hz
+const unsigned long PERIODO_PID_US = 5000;  // 5 ms = 200 Hz
 
 // ----- PWM -----
 const int PWM_FREQ = 5000;
-const int PWM_RES  = 8;                      // 8 bits -> 0..255
-const int CANAL_A  = 0;
-const int CANAL_B  = 1;
+const int PWM_RES = 8;  // 255
+const int CANAL_A = 0;
+const int CANAL_B = 1;
 
 // ====================== ESTADO ======================
 int minimo[NUM_SENSORES];
@@ -78,10 +69,12 @@ float integral = 0;
 int errorAnterior = 0;
 unsigned long ultimoPID = 0;
 
-enum Estado { ESPERA_CAL, ESPERA_INICIO, CORRIENDO };
+enum Estado { ESPERA_CAL,
+              ESPERA_INICIO,
+              CORRIENDO };
 Estado estado = ESPERA_CAL;
 
-// ====================== PWM (compatible con core 2.x y 3.x) ======================
+// ====================== PWM ======================
 void pwmInicio() {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(PIN_ENA, PWM_FREQ, PWM_RES);
@@ -159,8 +152,11 @@ void calibrar() {
 
   Serial.println("Calibracion terminada\nSensor\tMin\tMax");
   for (uint8_t i = 0; i < NUM_SENSORES; i++) {
-    Serial.print("S"); Serial.print(i + 1); Serial.print('\t');
-    Serial.print(minimo[i]); Serial.print('\t');
+    Serial.print("S");
+    Serial.print(i + 1);
+    Serial.print('\t');
+    Serial.print(minimo[i]);
+    Serial.print('\t');
     Serial.print(maximo[i]);
     if (maximo[i] - minimo[i] < RANGO_MINIMO) Serial.print("\t<-- rango pequeno, se ignorara este sensor");
     Serial.println();
@@ -178,7 +174,7 @@ int calcularPosicion() {
     long v;
 
     if (rango < RANGO_MINIMO) {
-      v = 0;                       // sensor sin calibración confiable: se ignora
+      v = 0;  // sensor sin calibración confiable: se ignora
     } else {
       v = (long)(crudo[i] - minimo[i]) * 1000 / rango;
       v = constrain(v, 0, 1000);
@@ -188,7 +184,7 @@ int calcularPosicion() {
 
     if (v > UMBRAL_PERDIDA) veLinea = true;
 
-    long w = (v > RUIDO_MIN) ? v : 0;   // filtra ruido de fondo
+    long w = (v > RUIDO_MIN) ? v : 0;  // filtra ruido de fondo
     suma += w;
     sumaPonderada += w * (long)i * 1000;
   }
@@ -211,8 +207,8 @@ void controlPID() {
 
   // --- Línea perdida: gira hacia el lado donde se vio por última vez ---
   if (pos < 0) {
-    if (ultimaPosicion < CENTRO) motores(-VEL_PERDIDA, VEL_PERDIDA);   // gira a la izquierda
-    else                         motores(VEL_PERDIDA, -VEL_PERDIDA);   // gira a la derecha
+    if (ultimaPosicion < CENTRO) motores(-VEL_PERDIDA, VEL_PERDIDA);  // gira a la izquierda
+    else motores(VEL_PERDIDA, -VEL_PERDIDA);                          // gira a la derecha
     integral = 0;
     return;
   }
@@ -290,20 +286,21 @@ void loop() {
       if (leerBoton()) procesoCalibracion();
       break;
 
-    case ESPERA_INICIO: {
-      int b = leerBoton();
-      if (b == 1) {
-        Serial.println("Arrancando en 1 s...");
-        delay(1000);          // tiempo para soltar el robot sobre la pista
-        reiniciarPID();
-        estado = CORRIENDO;
-        Serial.println("CORRIENDO");
-      } else if (b == 2) {
-        Serial.println("Recalibrando...");
-        procesoCalibracion(); // pulsación larga: recalibrar directamente
+    case ESPERA_INICIO:
+      {
+        int b = leerBoton();
+        if (b == 1) {
+          Serial.println("Arrancando en 1 s...");
+          delay(1000);  // tiempo para soltar el robot sobre la pista
+          reiniciarPID();
+          estado = CORRIENDO;
+          Serial.println("CORRIENDO");
+        } else if (b == 2) {
+          Serial.println("Recalibrando...");
+          procesoCalibracion();  // pulsación larga: recalibrar directamente
+        }
+        break;
       }
-      break;
-    }
 
     case CORRIENDO:
       if (micros() - ultimoPID >= PERIODO_PID_US) {
